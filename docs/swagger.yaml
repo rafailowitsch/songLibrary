@@ -1,0 +1,306 @@
+basePath: /
+definitions:
+  dto.AddSongRequest:
+    properties:
+      group:
+        type: string
+      name:
+        type: string
+    type: object
+  dto.PaginatedTextResponse:
+    properties:
+      text:
+        items:
+          type: string
+        type: array
+    type: object
+  dto.SongResponse:
+    properties:
+      created_at:
+        type: string
+      group:
+        type: string
+      id:
+        type: string
+      link:
+        type: string
+      name:
+        type: string
+      release_date:
+        type: string
+      text:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  dto.UpdateSongRequest:
+    properties:
+      group:
+        type: string
+      link:
+        type: string
+      name:
+        type: string
+      text:
+        type: string
+    type: object
+host: localhost:8089
+info:
+  contact: {}
+  description: This is a sample server for managing songs.
+  title: Song Library API
+  version: "1.0"
+paths:
+  /songs:
+    get:
+      consumes:
+      - application/json
+      description: Get a list of songs with optional filters for group, name, and
+        release date, with pagination
+      parameters:
+      - description: Filter by group
+        in: query
+        name: group
+        type: string
+      - description: Filter by song name
+        in: query
+        name: song
+        type: string
+      - description: Filter by release date (YYYY-MM-DD)
+        in: query
+        name: release_date
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Number of songs per page
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/dto.SongResponse'
+            type: array
+        "400":
+          description: invalid page or page_size parameter
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: internal error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get all songs with filters
+      tags:
+      - songs
+    post:
+      consumes:
+      - application/json
+      description: Add a new song to the library
+      parameters:
+      - description: Add song request
+        in: body
+        name: song
+        required: true
+        schema:
+          $ref: '#/definitions/dto.AddSongRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: song added successfully
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: internal error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Add a new song
+      tags:
+      - songs
+  /songs/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: Delete a song by ID
+      parameters:
+      - description: Song ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: song deleted successfully
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid song id
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: song not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: internal error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a song
+      tags:
+      - songs
+    get:
+      consumes:
+      - application/json
+      description: Get song by ID
+      parameters:
+      - description: Song ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.SongResponse'
+        "400":
+          description: invalid song id
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: song not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: internal error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a song
+      tags:
+      - songs
+    put:
+      consumes:
+      - application/json
+      description: Update a song by ID
+      parameters:
+      - description: Song ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Update song request
+        in: body
+        name: song
+        required: true
+        schema:
+          $ref: '#/definitions/dto.UpdateSongRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: song updated successfully
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid request or invalid song id
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: song not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: internal error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update a song
+      tags:
+      - songs
+  /songs/{id}/text:
+    get:
+      consumes:
+      - application/json
+      description: Get paginated text of the song by ID
+      parameters:
+      - description: Song ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.PaginatedTextResponse'
+        "400":
+          description: invalid song id
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: song not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: internal error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get paginated text of a song
+      tags:
+      - songs
+schemes:
+- http
+swagger: "2.0"

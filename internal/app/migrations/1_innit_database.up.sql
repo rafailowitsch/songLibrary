@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS songs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    group_name VARCHAR(255) NOT NULL,
+    text TEXT NOT NULL,
+    link TEXT,
+    release_date TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

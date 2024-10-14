@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,4 +39,13 @@ type Song struct {
 	ReleaseDate time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+type HTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e HTTPError) Error() string {
+	return fmt.Sprintf("status %d: %s", e.StatusCode, e.Message)
 }

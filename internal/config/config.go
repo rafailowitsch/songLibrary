@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/ilyakaznacheev/cleanenv"
+	"github.com/joho/godotenv"
 )
 
 type (
@@ -17,32 +18,32 @@ type (
 	}
 
 	PostgresConfig struct {
-		Host     string `yaml:"host" env-required:"true"`
-		Port     string `yaml:"port" env-required:"true"`
+		Address  string `yaml:"address" env-required:"true"`
 		User     string `yaml:"user" env-required:"true"`
 		Password string `yaml:"password" env-required:"true" env:"POSTGRES_PASSWORD"`
 		DBName   string `yaml:"dbname" env-required:"true"`
 	}
 
 	RedisConfig struct {
-		Host     string `yaml:"host" env-required:"true"`
-		Port     string `yaml:"port" env-required:"true"`
+		Address  string `yaml:"address" env-required:"true"`
 		Password string `yaml:"password" env-required:"true" env:"REDIS_PASSWORD"`
 		DB       int    `yaml:"db" env-default:"0"`
 	}
 
 	HTTPConfig struct {
-		Host string `yaml:"host" env-default:"localhost"`
-		Port string `yaml:"port" env-default:"8080"`
+		Address string `yaml:"address" env-required:"true"`
 	}
 
 	MusicInfoConfig struct {
-		Host string `yaml:"host" env-required:"true"`
-		Port string `yaml:"port" env-required:"true"`
+		Address string `yaml:"address" env-required:"true"`
 	}
 )
 
 func MustLoad() *Config {
+	if err := godotenv.Load(); err != nil {
+		log.Println("Warning: No .env file found")
+	}
+
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
 		log.Fatal("CONFIG_PATH is not set")

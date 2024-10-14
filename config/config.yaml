@@ -1,0 +1,16 @@
+env: "local"
+
+postgres:
+  address: "localhost:5434"
+  user: "postgres"
+  dbname: "postgres"
+
+redis:
+  address: "localhost:6380"
+  db: 0
+
+http:
+  address: "localhost:8089"
+
+music_info:
+  address: "localhost:8088"

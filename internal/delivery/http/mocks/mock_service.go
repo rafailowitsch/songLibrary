@@ -79,7 +79,7 @@ func (mr *MockServiceMockRecorder) Get(arg0, arg1 interface{}) *gomock.Call {
 }
 
 // GetAllWithFilter mocks base method.
-func (m *MockService) GetAllWithFilter(arg0 context.Context, arg1 *domain.SongSearch, arg2, arg3 int) ([]*domain.Song, error) {
+func (m *MockService) GetAllWithFilter(arg0 context.Context, arg1 *domain.Song, arg2, arg3 int) ([]*domain.Song, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetAllWithFilter", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].([]*domain.Song)
@@ -109,15 +109,15 @@ func (mr *MockServiceMockRecorder) GetPaginatedText(arg0, arg1 interface{}) *gom
 }
 
 // Update mocks base method.
-func (m *MockService) Update(arg0 context.Context, arg1 *domain.SongInfo) error {
+func (m *MockService) Update(arg0 context.Context, arg1 *domain.SongInfo, arg2 *domain.Song) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Update", arg0, arg1)
+	ret := m.ctrl.Call(m, "Update", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Update indicates an expected call of Update.
-func (mr *MockServiceMockRecorder) Update(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockServiceMockRecorder) Update(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockService)(nil).Update), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockService)(nil).Update), arg0, arg1, arg2)
 }

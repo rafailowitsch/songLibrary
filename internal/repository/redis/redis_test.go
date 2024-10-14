@@ -1,50 +1,28 @@
-package redi_test
+package redi
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"songLibrary/internal/domain"
+	"songLibrary/internal/dto"
 	"testing"
 	"time"
 
-	"songLibrary/internal/domain"
-	redi "songLibrary/internal/repository/redis"
-
-	"github.com/google/uuid"
-
 	"github.com/go-redis/redismock/v9"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
 
-// func TestRedis_GenKey(t *testing.T) {
-// 	redisClient, _ := redismock.NewClientMock()
-// 	r := redis.NewRedis(redisClient)
-
-// 	ctx := context.Background()
-
-// 	// Успешная генерация ключа
-// 	key, err := r.GenKey(ctx, "Muse", "Hysteria")
-// 	assert.NoError(t, err)
-// 	assert.Equal(t, "song:Muse-Hysteria", key)
-
-// 	// Ошибки при некорректных параметрах
-// 	_, err = r.GenKey(ctx, "Muse", "")
-// 	assert.ErrorIs(t, err, domain.ErrSongNameIsNull)
-
-// 	_, err = r.GenKey(ctx, "", "Hysteria")
-// 	assert.ErrorIs(t, err, domain.ErrSongGroupIsNull)
-
-// 	_, err = r.GenKey(ctx, "", "")
-// 	assert.ErrorIs(t, err, domain.ErrSongNameAndGroupIsNull)
-// }
-
-func TestRedis_Set(t *testing.T) {
-	redisClient, mock := redismock.NewClientMock()
-	r := redi.NewRedis(redisClient)
-
+func TestRedis_Set_Success(t *testing.T) {
 	ctx := context.Background()
+	mockRedis, mock := redismock.NewClientMock()
+
+	r := NewRedis(mockRedis)
+
+	// Создаем тестовые данные
 	song := &domain.Song{
-		ID:          uuid.MustParse("6ba7b810-9dad-11d1-80b4-00c04fd430c8"),
+		ID:          uuid.New(),
 		Name:        "Hysteria",
 		Group:       "Muse",
 		Text:        "It's bugging me...",
@@ -52,94 +30,197 @@ func TestRedis_Set(t *testing.T) {
 		ReleaseDate: time.Now(),
 	}
 
-	// Успешное сохранение песни в кэш
-	key := "song:Muse-Hysteria"
-	songJSON, _ := json.Marshal(song)
-	mock.ExpectSet(key, songJSON, 0).SetVal("OK")
-
-	err := r.Set(ctx, song)
+	songDTO := dto.SongToDTO(song)
+	songJSON, err := json.Marshal(songDTO)
 	assert.NoError(t, err)
 
-	// Ошибка при сериализации данных
-	song.Name = string([]byte{0xff, 0xfe, 0xfd}) // Невалидные байты
-	err = r.Set(ctx, song)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "could not marshal song to JSON")
+	// Ожидаем успешный Set запрос в Redis
+	mock.ExpectSet(songDTO.ID.String(), songJSON, 0).SetVal("OK")
 
-	// Ошибка при сохранении данных в Redis
-	song.Name = "Hysteria" // Корректируем данные
-	mock.ExpectSet(key, songJSON, 0).SetErr(errors.New("redis error"))
+	// Вызов метода Set
 	err = r.Set(ctx, song)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "could not set song JSON in Redis")
+	assert.NoError(t, err)
+
+	// Проверяем все ожидания
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// func TestRedis_Get(t *testing.T) {
-// 	redisClient, mock := redismock.NewClientMock()
-// 	r := redis.NewRedis(redisClient)
+func TestRedis_Set_Overwrite(t *testing.T) {
+	ctx := context.Background()
+	mockRedis, mock := redismock.NewClientMock()
 
-// 	ctx := context.Background()
-// 	key := "song:Muse-Hysteria"
+	r := NewRedis(mockRedis)
 
-// 	song := &domain.Song{
-// 		ID:          "12345",
-// 		Name:        "Hysteria",
-// 		Group:       "Muse",
-// 		Text:        "It's bugging me...",
-// 		Link:        "https://link-to-song.com",
-// 		ReleaseDate: time.Now(),
-// 	}
-// 	songJSON, _ := json.Marshal(song)
+	// Создаем первоначальные тестовые данные
+	songOriginal := &domain.Song{
+		ID:          uuid.New(),
+		Name:        "Hysteria",
+		Group:       "Muse",
+		Text:        "It's bugging me...",
+		Link:        "https://link-to-song.com",
+		ReleaseDate: time.Now(),
+	}
 
-// 	// Успешное получение песни из кэша
-// 	mock.ExpectGet(key).SetVal(string(songJSON))
+	songDTOOriginal := dto.SongToDTO(songOriginal)
+	songJSONOriginal, err := json.Marshal(songDTOOriginal)
+	assert.NoError(t, err)
 
-// 	cachedSong, err := r.Get(ctx, "Muse", "Hysteria")
-// 	assert.NoError(t, err)
-// 	assert.Equal(t, song, cachedSong)
+	// Ожидаем успешный Set запрос для первоначальных данных в Redis
+	mock.ExpectSet(songDTOOriginal.ID.String(), songJSONOriginal, 0).SetVal("OK")
 
-// 	// Ошибка: песня не найдена в кэше
-// 	mock.ExpectGet(key).RedisNil()
+	// Вызов метода Set для первоначальных данных
+	err = r.Set(ctx, songOriginal)
+	assert.NoError(t, err)
 
-// 	cachedSong, err = r.Get(ctx, "Muse", "NonExistingSong")
-// 	assert.Error(t, err)
-// 	assert.Contains(t, err.Error(), "song not found in Redis cache")
-// 	assert.Nil(t, cachedSong)
+	// Создаем новые тестовые данные для перезаписи
+	songUpdated := &domain.Song{
+		ID:          songOriginal.ID, // Используем тот же ID
+		Name:        "New Hysteria",
+		Group:       "Muse",
+		Text:        "It's bugging me again...",
+		Link:        "https://new-link-to-song.com",
+		ReleaseDate: time.Now(),
+	}
 
-// 	// Ошибка: некорректные данные в Redis (ошибка десериализации)
-// 	mock.ExpectGet(key).SetVal("invalid JSON")
+	songDTOUpdated := dto.SongToDTO(songUpdated)
+	songJSONUpdated, err := json.Marshal(songDTOUpdated)
+	assert.NoError(t, err)
 
-// 	cachedSong, err = r.Get(ctx, "Muse", "Hysteria")
-// 	assert.Error(t, err)
-// 	assert.Contains(t, err.Error(), "could not unmarshal JSON into song")
-// 	assert.Nil(t, cachedSong)
+	// Ожидаем успешный Set запрос для обновленных данных в Redis
+	mock.ExpectSet(songDTOUpdated.ID.String(), songJSONUpdated, 0).SetVal("OK")
 
-// 	// Ошибка при получении данных из Redis
-// 	mock.ExpectGet(key).SetErr(errors.New("redis error"))
+	// Вызов метода Set для обновленных данных (перезапись)
+	err = r.Set(ctx, songUpdated)
+	assert.NoError(t, err)
 
-// 	cachedSong, err = r.Get(ctx, "Muse", "Hysteria")
-// 	assert.Error(t, err)
-// 	assert.Contains(t, err.Error(), "could not get song from Redis")
-// 	assert.Nil(t, cachedSong)
-// }
+	// Проверяем все ожидания
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
 
-// func TestRedis_Invalidate(t *testing.T) {
-// 	redisClient, mock := redismock.NewClientMock()
-// 	r := redis.NewRedis(redisClient)
+func TestRedis_Get_Success(t *testing.T) {
+	ctx := context.Background()
+	mockRedis, mock := redismock.NewClientMock()
 
-// 	ctx := context.Background()
-// 	key := "song:Muse-Hysteria"
+	r := NewRedis(mockRedis)
 
-// 	// Успешная инвалидизация кэша
-// 	mock.ExpectDel(key).SetVal(1)
+	songID := uuid.New()
 
-// 	err := r.Invalidate(ctx, "Muse", "Hysteria")
-// 	assert.NoError(t, err)
+	songDTO := &dto.SongDTO{
+		ID:          songID,
+		Name:        "Hysteria",
+		Group:       "Muse",
+		Text:        "It's bugging me...",
+		Link:        "https://link-to-song.com",
+		ReleaseDate: time.Now(),
+	}
 
-// 	// Ошибка при попытке удалить песню из кэша
-// 	mock.ExpectDel(key).SetErr(errors.New("redis error"))
+	songJSON, err := json.Marshal(songDTO)
+	assert.NoError(t, err)
 
-// 	err = r.Invalidate(ctx, "Muse", "Hysteria")
-// 	assert.Error(t, err)
-// 	assert.Contains(t, err.Error(), "could not delete song from Redis")
-// }
+	// Ожидаем успешный Get запрос в Redis
+	mock.ExpectGet(songID.String()).SetVal(string(songJSON))
+
+	// Вызов метода Get
+	songInfo := &domain.SongInfo{ID: songID}
+	song, err := r.Get(ctx, songInfo)
+	assert.NoError(t, err)
+
+	// Проверяем полученные данные
+	assert.Equal(t, songDTO.Name, song.Name)
+	assert.Equal(t, songDTO.Group, song.Group)
+	assert.Equal(t, songDTO.Text, song.Text)
+
+	// Проверяем все ожидания
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRedis_Get_NotFound(t *testing.T) {
+	ctx := context.Background()
+	mockRedis, mock := redismock.NewClientMock()
+
+	r := NewRedis(mockRedis)
+
+	songID := uuid.New()
+
+	// Ожидаем, что Redis вернет Nil
+	mock.ExpectGet(songID.String()).RedisNil()
+
+	// Вызов метода Get
+	songInfo := &domain.SongInfo{ID: songID}
+	song, err := r.Get(ctx, songInfo)
+
+	// Проверяем результат
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "song not found in Redis cache")
+	assert.Nil(t, song)
+
+	// Проверяем все ожидания
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRedis_Get_UnmarshalError(t *testing.T) {
+	ctx := context.Background()
+	mockRedis, mock := redismock.NewClientMock()
+
+	r := NewRedis(mockRedis)
+
+	songID := uuid.New()
+
+	// Ожидаем, что Redis вернет некорректные данные
+	mock.ExpectGet(songID.String()).SetVal("invalid JSON")
+
+	// Вызов метода Get
+	songInfo := &domain.SongInfo{ID: songID}
+	song, err := r.Get(ctx, songInfo)
+
+	// Проверяем результат
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "could not unmarshal JSON into song")
+	assert.Nil(t, song)
+
+	// Проверяем все ожидания
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRedis_Invalidate_Success(t *testing.T) {
+	ctx := context.Background()
+	mockRedis, mock := redismock.NewClientMock()
+
+	r := NewRedis(mockRedis)
+
+	songID := uuid.New()
+
+	// Ожидаем успешный Del запрос в Redis
+	mock.ExpectDel(songID.String()).SetVal(1)
+
+	// Вызов метода Invalidate
+	songInfo := &domain.SongInfo{ID: songID}
+	err := r.Invalidate(ctx, songInfo)
+	assert.NoError(t, err)
+
+	// Проверяем все ожидания
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRedis_Invalidate_Failure(t *testing.T) {
+	ctx := context.Background()
+	mockRedis, mock := redismock.NewClientMock()
+
+	r := NewRedis(mockRedis)
+
+	songID := uuid.New()
+
+	// Ожидаем, что Redis вернет ошибку
+	mock.ExpectDel(songID.String()).SetErr(errors.New("some redis error"))
+
+	// Вызов метода Invalidate
+	songInfo := &domain.SongInfo{ID: songID}
+	err := r.Invalidate(ctx, songInfo)
+
+	// Проверяем результат
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "could not delete song from Redis")
+
+	// Проверяем все ожидания
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

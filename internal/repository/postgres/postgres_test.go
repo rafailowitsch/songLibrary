@@ -10,13 +10,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // Helper function to setup PostgreSQL container for songs
-func setupPostgresForSongs(t *testing.T) (*pgx.Conn, func()) {
+func setupPostgresForSongs(t *testing.T) (*pgxpool.Pool, func()) {
 	ctx := context.Background()
 
 	req := testcontainers.ContainerRequest{
@@ -42,7 +43,9 @@ func setupPostgresForSongs(t *testing.T) (*pgx.Conn, func()) {
 	assert.NoError(t, err)
 
 	dsn := "postgres://user:password@" + host + ":" + port.Port() + "/testdb?sslmode=disable"
-	conn, err := pgx.Connect(context.Background(), dsn)
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	assert.NoError(t, err)
+	conn, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	assert.NoError(t, err)
 
 	_, err = conn.Exec(ctx, `
@@ -60,7 +63,7 @@ func setupPostgresForSongs(t *testing.T) (*pgx.Conn, func()) {
 	assert.NoError(t, err)
 
 	teardown := func() {
-		conn.Close(ctx)
+		conn.Close()
 		postgresContainer.Terminate(ctx)
 	}
 
@@ -71,7 +74,7 @@ func TestSongDB_Create(t *testing.T) {
 	conn, teardown := setupPostgresForSongs(t)
 	defer teardown()
 
-	songDB := NewSongDB(conn)
+	songDB := NewPostgres(conn)
 
 	song := &domain.Song{
 		Name:        "Hysteria",
@@ -107,21 +110,20 @@ func TestSongDB_Read(t *testing.T) {
 	conn, teardown := setupPostgresForSongs(t)
 	defer teardown()
 
-	songSearch := &domain.SongSearch{
-		ID:    uuid.New(),
-		Name:  "Hysteria",
-		Group: "Muse",
-	}
+	// Insert a song for testing
+	songID := uuid.New()
 	_, err := conn.Exec(context.Background(), `INSERT INTO songs (id, name, group_name, text, link, release_date, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		songSearch.ID, songSearch.Name, songSearch.Group, "It's bugging me...", "https://link-to-song.com", time.Date(2003, 12, 1, 0, 0, 0, 0, time.UTC), time.Now(), time.Now())
+		songID, "Hysteria", "Muse", "It's bugging me...", "https://link-to-song.com", time.Date(2003, 12, 1, 0, 0, 0, 0, time.UTC), time.Now(), time.Now())
 	assert.NoError(t, err)
 
-	songDB := NewSongDB(conn)
+	songDB := NewPostgres(conn)
 
+	// Read the inserted song
+	songSearch := &domain.SongInfo{ID: songID}
 	song, err := songDB.Read(context.Background(), songSearch)
 	assert.NoError(t, err)
 	assert.NotNil(t, song)
-	assert.Equal(t, songSearch.ID, song.ID)
+	assert.Equal(t, songID, song.ID)
 	assert.Equal(t, "Hysteria", song.Name)
 	assert.Equal(t, "Muse", song.Group)
 	assert.Equal(t, "It's bugging me...", song.Text)
@@ -141,7 +143,7 @@ func TestSongDB_ReadAllWithFilter(t *testing.T) {
 	)
 	assert.NoError(t, err)
 
-	songDB := NewSongDB(conn)
+	songDB := NewPostgres(conn)
 
 	song := &domain.Song{
 		Group: "Muse",
@@ -166,21 +168,19 @@ func TestSongDB_Update(t *testing.T) {
 	conn, teardown := setupPostgresForSongs(t)
 	defer teardown()
 
-	// Инициализация песни для вставки
+	// Insert a song for testing
 	songID := uuid.New()
 	_, err := conn.Exec(context.Background(), `INSERT INTO songs (id, name, group_name, text, link, release_date, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		songID, "Hysteria", "Muse", "It's bugging me...", "https://link-to-song.com", time.Date(2003, 12, 1, 0, 0, 0, 0, time.UTC), time.Now(), time.Now())
 	assert.NoError(t, err)
 
-	songDB := NewSongDB(conn)
+	songDB := NewPostgres(conn)
 
-	// Инициализация структуры поиска
-	songSearch := &domain.SongSearch{
-		Name:  "Hysteria",
-		Group: "Muse",
+	// Initialize search and updatedSong
+	songSearch := &domain.SongInfo{
+		ID: songID,
 	}
 
-	// Инициализация новой песни для обновления
 	updatedSong := &domain.Song{
 		ID:          songID,
 		Name:        "Hysteria (Updated)",
@@ -194,7 +194,7 @@ func TestSongDB_Update(t *testing.T) {
 	err = songDB.Update(context.Background(), songSearch, updatedSong)
 	assert.NoError(t, err)
 
-	// Проверяем, что песня была обновлена
+	// Verify the song was updated
 	var song domain.Song
 	err = conn.QueryRow(context.Background(), `SELECT id, name, group_name, text, link, release_date, created_at, updated_at FROM songs WHERE id = $1`, songID).Scan(
 		&song.ID,
@@ -216,25 +216,22 @@ func TestSongDB_Delete(t *testing.T) {
 	conn, teardown := setupPostgresForSongs(t)
 	defer teardown()
 
-	// Инициализация песни для вставки
+	// Insert a song for testing
 	songID := uuid.New()
 	_, err := conn.Exec(context.Background(), `INSERT INTO songs (id, name, group_name, text, link, release_date, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		songID, "Hysteria", "Muse", "It's bugging me...", "https://link-to-song.com", time.Date(2003, 12, 1, 0, 0, 0, 0, time.UTC), time.Now(), time.Now())
 	assert.NoError(t, err)
 
-	songDB := NewSongDB(conn)
+	songDB := NewPostgres(conn)
 
-	// Инициализация структуры поиска
-	songSearch := &domain.SongSearch{
-		Name:  "Hysteria",
-		Group: "Muse",
-	}
+	// Create a search struct
+	songSearch := &domain.SongInfo{ID: songID}
 
-	// Удаляем песню
+	// Delete the song
 	err = songDB.Delete(context.Background(), songSearch)
 	assert.NoError(t, err)
 
-	// Проверяем, что песня была удалена
+	// Verify the song was deleted
 	var song domain.Song
 	err = conn.QueryRow(context.Background(), `SELECT id, name, group_name, text, link, release_date, created_at, updated_at FROM songs WHERE id = $1`, songID).Scan(
 		&song.ID,

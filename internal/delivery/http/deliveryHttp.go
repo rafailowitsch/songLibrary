@@ -1,4 +1,4 @@
-package handler
+package deliveryHttp
 
 import (
 	"context"
@@ -6,8 +6,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	mwLogger "songLibrary/internal/delivery/http/middleware/logger"
 	"songLibrary/internal/domain"
-	"songLibrary/pkg/logger/logger/sl"
+	"songLibrary/internal/dto"
+	"songLibrary/pkg/logger/sl"
 	"strconv"
 	"time"
 
@@ -17,30 +19,10 @@ import (
 	"github.com/google/uuid"
 )
 
-type SongRequest struct {
-	Name  string `json:"name" validate:"required,name"`
-	Group string `json:"group" validate:"required,group"`
-}
-
-type SongResponse struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Group       string    `json:"group"`
-	Text        string    `json:"text"`
-	Link        string    `json:"link"`
-	ReleaseDate time.Time `json:"release_date"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
-
-type PaginatedTextResponse struct {
-	Text []string `json:"text"`
-}
-
 type Service interface {
 	Add(ctx context.Context, song *domain.SongInfo) error
 	Get(ctx context.Context, song *domain.SongInfo) (*domain.Song, error)
-	Update(ctx context.Context, song *domain.SongInfo) error
+	Update(ctx context.Context, song *domain.SongInfo, updatedSong *domain.Song) error
 	Delete(ctx context.Context, song *domain.SongInfo) error
 
 	GetAllWithFilter(ctx context.Context, song *domain.Song, page, pageSize int) ([]*domain.Song, error)
@@ -62,17 +44,35 @@ func NewHandler(service Service, log *slog.Logger) *Handler {
 func (h *Handler) InitRoutes() *chi.Mux {
 	r := chi.NewRouter()
 
+	// r.Use(middleware.RequestID)
+	r.Use(middleware.Logger)
+	r.Use(mwLogger.New(h.log))
+	r.Use(middleware.Recoverer)
+
 	r.Route("/songs", func(r chi.Router) {
 		r.Post("/", h.Add)
+		r.Get("/{id}", h.Get)
 		r.Put("/{id}", h.Update)
 		r.Delete("/{id}", h.Delete)
 		r.Get("/", h.GetAllWithFilter)
 		r.Get("/{id}/text", h.GetPaginatedText)
 	})
 
+	r.Get("/ping", h.Ping)
+
 	return r
 }
 
+// @Summary Add a new song
+// @Description Add a new song to the library
+// @Tags songs
+// @Accept  json
+// @Produce  json
+// @Param song body dto.AddSongRequest true "Add song request"
+// @Success 201 {object} map[string]string "song added successfully"
+// @Failure 400 {object} map[string]string "invalid request"
+// @Failure 500 {object} map[string]string "internal error"
+// @Router /songs [post]
 func (h *Handler) Add(w http.ResponseWriter, r *http.Request) {
 	const op = "Handler.Add"
 
@@ -81,7 +81,7 @@ func (h *Handler) Add(w http.ResponseWriter, r *http.Request) {
 		slog.String("request_id", middleware.GetReqID(r.Context())),
 	)
 
-	var req SongRequest
+	var req dto.AddSongRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Error("failed to decode request", sl.Err(err))
 		render.Status(r, http.StatusBadRequest)
@@ -113,6 +113,70 @@ func (h *Handler) Add(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, OkResp("song added successfully"))
 }
 
+// @Summary Get a song
+// @Description Get song by ID
+// @Tags songs
+// @Accept  json
+// @Produce  json
+// @Param id path string true "Song ID"
+// @Success 200 {object} dto.SongResponse
+// @Failure 400 {object} map[string]string "invalid song id"
+// @Failure 404 {object} map[string]string "song not found"
+// @Failure 500 {object} map[string]string "internal error"
+// @Router /songs/{id} [get]
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	const op = "Handler.Get"
+
+	log := h.log.With(
+		slog.String("op", op),
+		slog.String("request_id", middleware.GetReqID(r.Context())),
+	)
+
+	idParam := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idParam)
+	if err != nil {
+		log.Error("invalid song id", sl.Err(err))
+		render.JSON(w, r, ErrResp("invalid song id"))
+		return
+	}
+
+	songInfo := &domain.SongInfo{ID: id}
+	song, err := h.Service.Get(r.Context(), songInfo)
+	if errors.Is(err, domain.ErrSongNotFound) {
+		log.Info("song not found", slog.String("id", id.String()))
+		render.JSON(w, r, ErrResp("song not found"))
+		return
+	}
+	if err != nil {
+		log.Error("failed to get song", sl.Err(err))
+		render.JSON(w, r, ErrResp("internal error"))
+		return
+	}
+
+	convSong, err := ConvertSongToResponse(song)
+	if err != nil {
+		log.Error("failed to convert song into response", sl.Err(err))
+		render.JSON(w, r, ErrResp("conversion error"))
+	}
+
+	log.Info("song successfully fetched", slog.String("song_name", song.Name))
+
+	render.Status(r, http.StatusOK)
+	render.JSON(w, r, convSong)
+}
+
+// @Summary Update a song
+// @Description Update a song by ID
+// @Tags songs
+// @Accept  json
+// @Produce  json
+// @Param id path string true "Song ID"
+// @Param song body dto.UpdateSongRequest true "Update song request"
+// @Success 200 {object} map[string]string "song updated successfully"
+// @Failure 400 {object} map[string]string "invalid request or invalid song id"
+// @Failure 404 {object} map[string]string "song not found"
+// @Failure 500 {object} map[string]string "internal error"
+// @Router /songs/{id} [put]
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	const op = "Handler.Update"
 
@@ -130,7 +194,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req SongRequest
+	var req dto.UpdateSongRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Error("failed to decode request", sl.Err(err))
 		render.Status(r, http.StatusBadRequest)
@@ -138,13 +202,15 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	songInfo := &domain.SongInfo{
-		ID:    id,
+	songInfo := &domain.SongInfo{ID: id}
+	song := &domain.Song{
 		Name:  req.Name,
 		Group: req.Group,
+		Text:  req.Text,
+		Link:  req.Link,
 	}
 
-	if err := h.Service.Update(r.Context(), songInfo); err != nil {
+	if err := h.Service.Update(r.Context(), songInfo, song); err != nil {
 		if errors.Is(err, domain.ErrSongNotFound) {
 			log.Info("song not found during update", sl.Err(err))
 			render.Status(r, http.StatusNotFound)
@@ -162,6 +228,17 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, OkResp("song updated successfully"))
 }
 
+// @Summary Delete a song
+// @Description Delete a song by ID
+// @Tags songs
+// @Accept  json
+// @Produce  json
+// @Param id path string true "Song ID"
+// @Success 200 {object} map[string]string "song deleted successfully"
+// @Failure 400 {object} map[string]string "invalid song id"
+// @Failure 404 {object} map[string]string "song not found"
+// @Failure 500 {object} map[string]string "internal error"
+// @Router /songs/{id} [delete]
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	const op = "Handler.Delete"
 
@@ -199,6 +276,20 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, OkResp("song deleted successfully"))
 }
 
+// @Summary Get all songs with filters
+// @Description Get a list of songs with optional filters for group, name, and release date, with pagination
+// @Tags songs
+// @Accept  json
+// @Produce  json
+// @Param group query string false "Filter by group"
+// @Param song query string false "Filter by song name"
+// @Param release_date query string false "Filter by release date (YYYY-MM-DD)"
+// @Param page query int false "Page number"
+// @Param page_size query int false "Number of songs per page"
+// @Success 200 {array} dto.SongResponse
+// @Failure 400 {object} map[string]string "invalid page or page_size parameter"
+// @Failure 500 {object} map[string]string "internal error"
+// @Router /songs [get]
 func (h *Handler) GetAllWithFilter(w http.ResponseWriter, r *http.Request) {
 	const op = "Handler.GetAllWithFilter"
 
@@ -208,14 +299,17 @@ func (h *Handler) GetAllWithFilter(w http.ResponseWriter, r *http.Request) {
 	)
 
 	group := r.URL.Query().Get("group")
-	name := r.URL.Query().Get("name")
+	name := r.URL.Query().Get("song")
+	releaseDateStr := r.URL.Query().Get("release_date")
 
 	pageStr := r.URL.Query().Get("page")
 	pageSizeStr := r.URL.Query().Get("page_size")
 
-	page := 1
-	pageSize := 10
+	page := 0
+	pageSize := 0
 	var err error
+
+	// Обработка параметра page
 	if pageStr != "" {
 		page, err = strconv.Atoi(pageStr)
 		if err != nil || page <= 0 {
@@ -225,6 +319,8 @@ func (h *Handler) GetAllWithFilter(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// Обработка параметра page_size
 	if pageSizeStr != "" {
 		pageSize, err = strconv.Atoi(pageSizeStr)
 		if err != nil || pageSize <= 0 {
@@ -235,12 +331,31 @@ func (h *Handler) GetAllWithFilter(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	songSearch := &domain.SongSearch{
-		Name:  name,
-		Group: group,
+	// Обработка параметра release_date (дата релиза)
+	var releaseDate time.Time
+	if releaseDateStr != "" {
+		releaseDate, err = time.Parse("2006-01-02", releaseDateStr) // Используем формат YYYY-MM-DD
+		if err != nil {
+			log.Warn("invalid release_date parameter", slog.String("release_date", releaseDateStr))
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, ErrResp("invalid release_date parameter"))
+			return
+		}
 	}
 
-	log.Info("attempting to fetch songs with filters", slog.String("group", group), slog.String("name", name), slog.Int("page", page), slog.Int("page_size", pageSize))
+	songSearch := &domain.Song{
+		Name:        name,
+		Group:       group,
+		ReleaseDate: releaseDate, // Передаем дату релиза в объект поиска
+	}
+
+	log.Info("attempting to fetch songs with filters",
+		slog.String("group", group),
+		slog.String("name", name),
+		slog.String("release_date", releaseDateStr),
+		slog.Int("page", page),
+		slog.Int("page_size", pageSize),
+	)
 
 	songs, err := h.Service.GetAllWithFilter(r.Context(), songSearch, page, pageSize)
 	if err != nil {
@@ -250,7 +365,7 @@ func (h *Handler) GetAllWithFilter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var songsResponse []SongResponse
+	var songsResponse []dto.SongResponse
 	for _, song := range songs {
 		songsResponse = append(songsResponse, *MustConvertSongToResponse(song))
 	}
@@ -261,6 +376,17 @@ func (h *Handler) GetAllWithFilter(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, songsResponse)
 }
 
+// @Summary Get paginated text of a song
+// @Description Get paginated text of the song by ID
+// @Tags songs
+// @Accept  json
+// @Produce  json
+// @Param id path string true "Song ID"
+// @Success 200 {object} dto.PaginatedTextResponse
+// @Failure 400 {object} map[string]string "invalid song id"
+// @Failure 404 {object} map[string]string "song not found"
+// @Failure 500 {object} map[string]string "internal error"
+// @Router /songs/{id}/text [get]
 func (h *Handler) GetPaginatedText(w http.ResponseWriter, r *http.Request) {
 	const op = "Handler.GetPaginatedText"
 
@@ -296,10 +422,22 @@ func (h *Handler) GetPaginatedText(w http.ResponseWriter, r *http.Request) {
 
 	log.Info("song text successfully paginated", slog.String("song_id", id.String()))
 	render.Status(r, http.StatusOK)
-	render.JSON(w, r, PaginatedTextResponse{Text: verses})
+	render.JSON(w, r, dto.PaginatedTextResponse{Text: verses})
 }
 
-func ConvertSongToResponse(song *domain.Song) (*SongResponse, error) {
+func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {
+	const op = "Handler.Ping"
+
+	log := h.log.With(
+		slog.String("op", op),
+		slog.String("request_id", middleware.GetReqID(r.Context())),
+	)
+	log.Info("ping sent")
+	render.Status(r, http.StatusOK)
+	render.JSON(w, r, "pong")
+}
+
+func ConvertSongToResponse(song *domain.Song) (*dto.SongResponse, error) {
 	if song.ID == uuid.Nil {
 		return nil, domain.ErrInvalidSongID
 	}
@@ -316,8 +454,8 @@ func ConvertSongToResponse(song *domain.Song) (*SongResponse, error) {
 		return nil, domain.ErrInvalidSongText
 	}
 
-	response := &SongResponse{
-		ID:          song.ID,
+	response := &dto.SongResponse{
+		ID:          song.ID.String(),
 		Name:        song.Name,
 		Group:       song.Group,
 		Text:        song.Text,
@@ -330,7 +468,7 @@ func ConvertSongToResponse(song *domain.Song) (*SongResponse, error) {
 	return response, nil
 }
 
-func MustConvertSongToResponse(song *domain.Song) *SongResponse {
+func MustConvertSongToResponse(song *domain.Song) *dto.SongResponse {
 	songResponse, _ := ConvertSongToResponse(song)
 	return songResponse
 }
@@ -342,44 +480,3 @@ func ErrResp(err string) map[string]string {
 func OkResp(msg string) map[string]string {
 	return map[string]string{"message": msg}
 }
-
-// func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
-// 	const op = "Handler.Get"
-
-// 	log := h.log.With(
-// 		slog.String("op", op),
-// 		slog.String("request_id", middleware.GetReqID(r.Context())),
-// 	)
-
-// 	idParam := chi.URLParam(r, "id")
-// 	id, err := uuid.Parse(idParam)
-// 	if err != nil {
-// 		log.Error("invalid song id", sl.Err(err))
-// 		render.JSON(w, r, resp.Error("invalid song id"))
-// 		return
-// 	}
-
-// 	songInfo := &domain.SongInfo{ID: id}
-// 	song, err := h.Service.Get(r.Context(), songInfo)
-// 	if errors.Is(err, domain.ErrSongNotFound) {
-// 		log.Info("song not found", slog.String("id", id.String()))
-// 		render.JSON(w, r, resp.Error("song not found"))
-// 		return
-// 	}
-// 	if err != nil {
-// 		log.Error("failed to get song", sl.Err(err))
-// 		render.JSON(w, r, resp.Error("internal error"))
-// 		return
-// 	}
-
-// 	convSong, err := ConvertSongToResponse(song)
-// 	if err != nil {
-// 		log.Error("failed to convert song into response", sl.Err(err))
-// 		render.JSON(w, r, resp.Error("conversion error"))
-// 	}
-
-// 	log.Info("song successfully fetched", slog.String("song_name", song.Name))
-
-// 	render.Status(r, http.StatusOK)
-// 	render.JSON(w, r, convSong)
-// }

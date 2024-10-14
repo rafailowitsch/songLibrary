@@ -1,4 +1,4 @@
-package handler_test
+package deliveryHttp_test
 
 import (
 	"bytes"
@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	delivery "songLibrary/internal/delivery/http"
+	handler "songLibrary/internal/delivery/http"
 	"songLibrary/internal/delivery/http/mocks"
 	"songLibrary/internal/domain"
-	"songLibrary/pkg/logger/logger/handlers/slogdiscard"
+	"songLibrary/pkg/logger/handlers/slogdiscard"
 	"testing"
 	"time"
 
@@ -27,9 +27,9 @@ func TestAddSong_Success(t *testing.T) {
 	mockService := mocks.NewMockService(ctrl)
 	mockLog := slog.New(slogdiscard.NewDiscardHandler())
 
-	h := delivery.NewHandler(mockService, mockLog)
+	h := handler.NewHandler(mockService, mockLog)
 
-	reqBody := delivery.SongRequest{
+	reqBody := handler.SongJSON{
 		Name:  "Hysteria",
 		Group: "Muse",
 	}
@@ -57,6 +57,32 @@ func TestAddSong_Success(t *testing.T) {
 	assert.Equal(t, "song added successfully", respBody["message"])
 }
 
+func TestAddSong_MissingFields(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mocks.NewMockService(ctrl)
+	mockLog := slog.New(slogdiscard.NewDiscardHandler())
+
+	h := handler.NewHandler(mockService, mockLog)
+
+	// Запрос без поля name и group
+	req := httptest.NewRequest(http.MethodPost, "/songs", bytes.NewReader([]byte(`{}`)))
+	w := httptest.NewRecorder()
+
+	h.Add(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	var respBody map[string]string
+	err := json.NewDecoder(resp.Body).Decode(&respBody)
+	assert.NoError(t, err)
+	assert.Equal(t, "name and group are required", respBody["error"])
+}
+
 func TestAddSong_Failure_DecodeError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -64,7 +90,7 @@ func TestAddSong_Failure_DecodeError(t *testing.T) {
 	mockService := mocks.NewMockService(ctrl)
 	mockLog := slog.New(slogdiscard.NewDiscardHandler())
 
-	h := delivery.NewHandler(mockService, mockLog)
+	h := handler.NewHandler(mockService, mockLog)
 
 	req := httptest.NewRequest(http.MethodPost, "/songs", bytes.NewBuffer([]byte("{invalid-json")))
 	w := httptest.NewRecorder()
@@ -89,9 +115,9 @@ func TestAddSong_Failure_ServiceError(t *testing.T) {
 	mockService := mocks.NewMockService(ctrl)
 	mockLog := slog.New(slogdiscard.NewDiscardHandler())
 
-	h := delivery.NewHandler(mockService, mockLog)
+	h := handler.NewHandler(mockService, mockLog)
 
-	reqBody := delivery.SongRequest{
+	reqBody := handler.SongJSON{
 		Name:  "Hysteria",
 		Group: "Muse",
 	}
@@ -119,6 +145,103 @@ func TestAddSong_Failure_ServiceError(t *testing.T) {
 	assert.Equal(t, "internal error", respBody["error"])
 }
 
+func TestUpdateSong_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mocks.NewMockService(ctrl)
+	mockLog := slog.New(slogdiscard.NewDiscardHandler())
+
+	h := handler.NewHandler(mockService, mockLog)
+
+	songID := uuid.New()
+	reqBody := handler.SongJSON{
+		Name:  "Updated Song",
+		Group: "Muse",
+	}
+	reqBodyBytes, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPut, "/songs/"+songID.String(), bytes.NewReader(reqBodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	mockService.EXPECT().Update(gomock.Any(), &domain.SongInfo{
+		ID: songID,
+	}, gomock.Any()).Return(nil)
+
+	h.Update(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var respBody map[string]string
+	err := json.NewDecoder(resp.Body).Decode(&respBody)
+	assert.NoError(t, err)
+	assert.Equal(t, "song updated successfully", respBody["message"])
+}
+
+func TestUpdateSong_InvalidID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mocks.NewMockService(ctrl)
+	mockLog := slog.New(slogdiscard.NewDiscardHandler())
+
+	h := handler.NewHandler(mockService, mockLog)
+
+	req := httptest.NewRequest(http.MethodPut, "/songs/invalid-uuid", bytes.NewBuffer([]byte(`{"name": "Updated Song", "group": "Muse"}`)))
+	w := httptest.NewRecorder()
+
+	h.Update(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	var respBody map[string]string
+	err := json.NewDecoder(resp.Body).Decode(&respBody)
+	assert.NoError(t, err)
+	assert.Equal(t, "invalid song id", respBody["error"])
+}
+
+// func TestUpdateSong_NotFound(t *testing.T) {
+// 	ctrl := gomock.NewController(t)
+// 	defer ctrl.Finish()
+
+// 	mockService := mocks.NewMockService(ctrl)
+// 	mockLog := slog.New(slogdiscard.NewDiscardHandler())
+
+// 	h := handler.NewHandler(mockService, mockLog)
+
+// 	songID := uuid.New()
+
+// 	reqBody := handler.SongJSON{
+// 		Name:  "Updated Song",
+// 		Group: "Muse",
+// 	}
+// 	reqBodyBytes, _ := json.Marshal(reqBody)
+
+// 	req := httptest.NewRequest(http.MethodPut, "/songs/"+songID.String(), bytes.NewReader(reqBodyBytes))
+// 	w := httptest.NewRecorder()
+
+// 	mockService.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).Return(domain.ErrSongNotFound)
+
+// 	h.Update(w, req)
+
+// 	resp := w.Result()
+// 	defer resp.Body.Close()
+
+// 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+// 	var respBody map[string]string
+// 	err := json.NewDecoder(resp.Body).Decode(&respBody)
+// 	assert.NoError(t, err)
+// 	assert.Equal(t, "song not found", respBody["error"])
+// }
+
 func TestGetAllWithFilter_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -126,7 +249,7 @@ func TestGetAllWithFilter_Success(t *testing.T) {
 	mockService := mocks.NewMockService(ctrl)
 	mockLog := slog.New(slogdiscard.NewDiscardHandler())
 
-	h := delivery.NewHandler(mockService, mockLog)
+	h := handler.NewHandler(mockService, mockLog)
 
 	req := httptest.NewRequest(http.MethodGet, "/songs?page=1&page_size=2&name=Hysteria&group=Muse", nil)
 	w := httptest.NewRecorder()
@@ -144,10 +267,13 @@ func TestGetAllWithFilter_Success(t *testing.T) {
 		},
 	}
 
-	mockService.EXPECT().GetAllWithFilter(gomock.Any(), &domain.SongSearch{
+	// Создаем Song объект с данными, как указано в запросе
+	expectedSongFilter := &domain.Song{
 		Name:  "Hysteria",
 		Group: "Muse",
-	}, 1, 2).Return(expectedSongs, nil)
+	}
+
+	mockService.EXPECT().GetAllWithFilter(gomock.Any(), expectedSongFilter, 1, 2).Return(expectedSongs, nil)
 
 	h.GetAllWithFilter(w, req)
 
@@ -156,7 +282,7 @@ func TestGetAllWithFilter_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var songsResponse []delivery.SongResponse
+	var songsResponse []handler.SongJSON
 	err := json.NewDecoder(resp.Body).Decode(&songsResponse)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(songsResponse))
@@ -171,7 +297,7 @@ func TestGetAllWithFilter_InvalidPageSize(t *testing.T) {
 	mockService := mocks.NewMockService(ctrl)
 	mockLog := slog.New(slogdiscard.NewDiscardHandler())
 
-	h := delivery.NewHandler(mockService, mockLog)
+	h := handler.NewHandler(mockService, mockLog)
 
 	req := httptest.NewRequest(http.MethodGet, "/songs?page=1&page_size=-1", nil)
 	w := httptest.NewRecorder()
@@ -189,6 +315,32 @@ func TestGetAllWithFilter_InvalidPageSize(t *testing.T) {
 	assert.Equal(t, "invalid page_size parameter", respBody["error"])
 }
 
+func TestGetAllWithFilter_InvalidDate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mocks.NewMockService(ctrl)
+	mockLog := slog.New(slogdiscard.NewDiscardHandler())
+
+	h := handler.NewHandler(mockService, mockLog)
+
+	// Некорректный формат даты (неправильный порядок: день перед месяцем)
+	req := httptest.NewRequest(http.MethodGet, "/songs?release_date=2024-13-01", nil)
+	w := httptest.NewRecorder()
+
+	h.GetAllWithFilter(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	var respBody map[string]string
+	err := json.NewDecoder(resp.Body).Decode(&respBody)
+	assert.NoError(t, err)
+	assert.Equal(t, "invalid release_date parameter", respBody["error"])
+}
+
 func TestDeleteSong_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -196,7 +348,7 @@ func TestDeleteSong_Success(t *testing.T) {
 	mockService := mocks.NewMockService(ctrl)
 	mockLog := slog.New(slogdiscard.NewDiscardHandler())
 
-	h := delivery.NewHandler(mockService, mockLog)
+	h := handler.NewHandler(mockService, mockLog)
 
 	// Создаем маршрутизатор и регистрируем маршруты
 	r := chi.NewRouter()
@@ -232,7 +384,7 @@ func TestDeleteSong_SongNotFound(t *testing.T) {
 	mockLog := slog.New(slogdiscard.NewDiscardHandler())
 
 	// Инициализация обработчика и маршрутизатора
-	h := delivery.NewHandler(mockService, mockLog)
+	h := handler.NewHandler(mockService, mockLog)
 	r := chi.NewRouter()
 	r.Delete("/songs/{id}", h.Delete)
 
@@ -270,7 +422,7 @@ func TestGetPaginatedText_Success(t *testing.T) {
 	mockLog := slog.New(slogdiscard.NewDiscardHandler())
 
 	// Инициализация обработчика и маршрутизатора
-	h := delivery.NewHandler(mockService, mockLog)
+	h := handler.NewHandler(mockService, mockLog)
 	r := chi.NewRouter()
 	r.Get("/songs/{id}/text", h.GetPaginatedText)
 
@@ -298,7 +450,7 @@ func TestGetPaginatedText_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var respBody delivery.PaginatedTextResponse
+	var respBody handler.PaginatedTextResponse
 	err := json.NewDecoder(resp.Body).Decode(&respBody)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedVerses, respBody.Text)
@@ -312,7 +464,7 @@ func TestGetPaginatedText_SongNotFound(t *testing.T) {
 	mockLog := slog.New(slogdiscard.NewDiscardHandler())
 
 	// Инициализация обработчика и маршрутизатора
-	h := delivery.NewHandler(mockService, mockLog)
+	h := handler.NewHandler(mockService, mockLog)
 	r := chi.NewRouter()
 	r.Get("/songs/{id}/text", h.GetPaginatedText)
 

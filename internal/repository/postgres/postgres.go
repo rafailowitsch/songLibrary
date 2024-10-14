@@ -11,19 +11,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type SongDB struct {
-	db *pgx.Conn
+type Postgres struct {
+	db *pgxpool.Pool
 }
 
-func NewSongDB(db *pgx.Conn) *SongDB {
-	return &SongDB{
-		db: db,
+func NewPostgres(conn *pgxpool.Pool) *Postgres {
+	return &Postgres{
+		db: conn,
 	}
 }
 
-func (s *SongDB) Create(ctx context.Context, song *domain.Song) error {
+func (p *Postgres) Create(ctx context.Context, song *domain.Song) error {
 	const op = "repository.SongDB.Create"
 
 	song.ID = uuid.New()
@@ -33,7 +34,10 @@ func (s *SongDB) Create(ctx context.Context, song *domain.Song) error {
 	query := `INSERT INTO songs (id, name, group_name, text, link, release_date, created_at, updated_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 
-	_, err := s.db.Exec(ctx, query, song.ID, song.Name, song.Group, song.Text, song.Link, song.ReleaseDate, song.CreatedAt, song.UpdatedAt)
+	_, err := p.db.Exec(
+		ctx, query, song.ID, song.Name, song.Group, song.Text,
+		song.Link, song.ReleaseDate, song.CreatedAt, song.UpdatedAt,
+	)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
@@ -47,15 +51,19 @@ func (s *SongDB) Create(ctx context.Context, song *domain.Song) error {
 	return nil
 }
 
-func (s *SongDB) Read(ctx context.Context, song *domain.SongSearch) (*domain.Song, error) {
+func (p *Postgres) Read(ctx context.Context, song *domain.SongInfo) (*domain.Song, error) {
 	const op = "repository.SongDB.Read"
 
-	query := `SELECT id, name, group_name, text, link, release_date, created_at, updated_at
+	query := `SELECT id, name, group_name, text,
+			  link, release_date, created_at, updated_at
               FROM songs WHERE id = $1`
-	row := s.db.QueryRow(ctx, query, song.ID)
+	row := p.db.QueryRow(ctx, query, song.ID)
 
 	var targetSong domain.Song
-	err := row.Scan(&targetSong.ID, &targetSong.Name, &targetSong.Group, &targetSong.Text, &targetSong.Link, &targetSong.ReleaseDate, &targetSong.CreatedAt, &targetSong.UpdatedAt)
+	err := row.Scan(
+		&targetSong.ID, &targetSong.Name, &targetSong.Group, &targetSong.Text,
+		&targetSong.Link, &targetSong.ReleaseDate, &targetSong.CreatedAt, &targetSong.UpdatedAt,
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%s: %w", op, domain.ErrSongNotFound)
@@ -66,11 +74,13 @@ func (s *SongDB) Read(ctx context.Context, song *domain.SongSearch) (*domain.Son
 	return &targetSong, nil
 }
 
-func (s *SongDB) ReadAllWithFilter(ctx context.Context, song *domain.Song, limit, offset int) ([]*domain.Song, error) {
+func (p *Postgres) ReadAllWithFilter(ctx context.Context, song *domain.Song, limit, offset int) ([]*domain.Song, error) {
 	const op = "repository.SongDB.ReadAllWithFilter"
 
 	// Базовый запрос
-	query := `SELECT id, name, group_name, text, link, release_date, created_at, updated_at FROM songs`
+	query := `SELECT id, name, group_name, text,
+			  link, release_date, created_at, updated_at
+			  FROM songs`
 	var conditions []string
 	var params []interface{}
 	var paramIndex = 1
@@ -103,7 +113,7 @@ func (s *SongDB) ReadAllWithFilter(ctx context.Context, song *domain.Song, limit
 	}
 
 	// Выполняем запрос
-	rows, err := s.db.Query(ctx, query, params...)
+	rows, err := p.db.Query(ctx, query, params...)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
@@ -113,7 +123,10 @@ func (s *SongDB) ReadAllWithFilter(ctx context.Context, song *domain.Song, limit
 	var songs []*domain.Song
 	for rows.Next() {
 		var song domain.Song
-		err := rows.Scan(&song.ID, &song.Name, &song.Group, &song.Text, &song.Link, &song.ReleaseDate, &song.CreatedAt, &song.UpdatedAt)
+		err := rows.Scan(
+			&song.ID, &song.Name, &song.Group, &song.Text,
+			&song.Link, &song.ReleaseDate, &song.CreatedAt, &song.UpdatedAt,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", op, err)
 		}
@@ -123,15 +136,20 @@ func (s *SongDB) ReadAllWithFilter(ctx context.Context, song *domain.Song, limit
 	return songs, nil
 }
 
-func (s *SongDB) Update(ctx context.Context, songSearch *domain.SongSearch, updatedSong *domain.Song) error {
+func (p *Postgres) Update(ctx context.Context, song *domain.SongInfo, updatedSong *domain.Song) error {
 	const op = "repository.SongDB.Update"
 
 	updatedSong.UpdatedAt = time.Now()
 
-	query := `UPDATE songs SET name = $1, group_name = $2, text = $3, link = $4, release_date = $5, updated_at = $6 
+	query := `UPDATE songs
+			  SET name = $1, group_name = $2, text = $3,
+			  link = $4, release_date = $5, updated_at = $6 
               WHERE id = $7`
 
-	result, err := s.db.Exec(ctx, query, updatedSong.Name, updatedSong.Group, updatedSong.Text, updatedSong.Link, updatedSong.ReleaseDate, updatedSong.UpdatedAt, songSearch.ID)
+	result, err := p.db.Exec(
+		ctx, query, updatedSong.Name, updatedSong.Group, updatedSong.Text, updatedSong.Link,
+		updatedSong.ReleaseDate, updatedSong.UpdatedAt, song.ID,
+	)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -144,11 +162,11 @@ func (s *SongDB) Update(ctx context.Context, songSearch *domain.SongSearch, upda
 	return nil
 }
 
-func (s *SongDB) Delete(ctx context.Context, songSearch *domain.SongSearch) error {
+func (p *Postgres) Delete(ctx context.Context, song *domain.SongInfo) error {
 	const op = "repository.SongDB.Delete"
 
 	query := `DELETE FROM songs WHERE id = $1`
-	result, err := s.db.Exec(ctx, query, songSearch.ID)
+	result, err := p.db.Exec(ctx, query, song.ID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}

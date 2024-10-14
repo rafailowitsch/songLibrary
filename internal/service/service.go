@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"songLibrary/internal/domain"
-	"songLibrary/pkg/logger/logger/sl"
+	"songLibrary/pkg/logger/sl"
 	"strings"
 	"time"
 )
@@ -27,7 +28,7 @@ type MusicInfo interface {
 type IService interface {
 	Add(ctx context.Context, song *domain.SongInfo) error
 	Get(ctx context.Context, song *domain.SongInfo) (*domain.Song, error)
-	Update(ctx context.Context, song *domain.SongInfo) error
+	Update(ctx context.Context, song *domain.SongInfo, updatedSong *domain.Song) error
 	Delete(ctx context.Context, song *domain.SongInfo) error
 
 	GetAllWithFilter(ctx context.Context, song *domain.Song, page, pageSize int) ([]*domain.Song, error)
@@ -61,20 +62,20 @@ func (s *Service) Add(ctx context.Context, songInfo *domain.SongInfo) error {
 	log.Info("attempting to add a new song")
 
 	// Fetch music info from external API
-	song, err := s.MusicInfo.FetchMusicInfo(ctx, &domain.SongInfo{Name: songInfo.Name, Group: songInfo.Group})
+	// Fetch music info from external API
+	song, err := s.MusicInfo.FetchMusicInfo(ctx, songInfo)
 	if err != nil {
+		var httpErr *domain.HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusBadRequest {
+			// Log and return a special error for bad request from MusicInfo
+			log.Warn("failed to fetch song info: bad request from MusicInfo", sl.Err(err))
+			return fmt.Errorf("%s: bad request from MusicInfo: %w", op, err)
+		}
 		log.Error("failed to fetch song info", sl.Err(err))
 		return fmt.Errorf("%s: failed to fetch song info: %w", op, err)
 	}
 
 	log.Debug("fetched song info successfully")
-
-	// Merge the fetched song information with the input data
-	// song.Text = songInfo.Text
-	// song.ReleaseDate = songInfo.ReleaseDate
-	// song.Link = songInfo.Link
-	// song.CreatedAt = time.Now()
-	// song.UpdatedAt = time.Now()
 
 	// Save the song to the repository
 	err = s.Repo.Create(ctx, song)
@@ -119,35 +120,29 @@ func (s *Service) Get(ctx context.Context, song *domain.SongInfo) (*domain.Song,
 }
 
 // Update method to update an existing song's information.
-func (s *Service) Update(ctx context.Context, song *domain.SongInfo) error {
+func (s *Service) Update(ctx context.Context, songInfo *domain.SongInfo, updatedSong *domain.Song) error {
 	const op = "Service.Update"
 
 	log := s.log.With(
 		slog.String("op", op),
-		slog.String("song_name", song.Name),
-		slog.String("group_name", song.Group),
+		slog.String("song_name", songInfo.Name),
+		slog.String("group_name", songInfo.Group),
 	)
 
 	log.Info("attempting to update song")
 
 	// Fetch the existing song information
-	targetSong, err := s.Get(ctx, song)
+	targetSong, err := s.Get(ctx, songInfo)
 	if err != nil {
 		log.Error("failed to fetch song", sl.Err(err))
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
-	updatedSong := &domain.Song{
-		Name:        song.Name,
-		Group:       song.Group,
-		Text:        targetSong.Text,
-		Link:        targetSong.Link,
-		ReleaseDate: targetSong.ReleaseDate,
-		UpdatedAt:   time.Now(),
-	}
+	// Merge updatedSong with targetSong
+	mergedSong := mergeSongs(updatedSong, targetSong)
 
 	// Update the song in the repository
-	err = s.Repo.Update(ctx, song, updatedSong)
+	err = s.Repo.Update(ctx, songInfo, mergedSong)
 	if err != nil {
 		if errors.Is(err, domain.ErrSongNotFound) {
 			log.Warn("song not found during update", sl.Err(err))
@@ -248,4 +243,31 @@ func (s *Service) GetPaginatedText(ctx context.Context, song *domain.SongInfo) (
 	log.Info("song text successfully paginated", slog.String("song_name", targetSong.Name), slog.Int("verses_count", len(verses)))
 
 	return verses, nil
+}
+
+func mergeSongs(updatedSong, targetSong *domain.Song) *domain.Song {
+	updatedSong.ID = targetSong.ID
+
+	if updatedSong.Name == "" {
+		updatedSong.Name = targetSong.Name
+	}
+	if updatedSong.Group == "" {
+		updatedSong.Group = targetSong.Group
+	}
+	if updatedSong.Text == "" {
+		updatedSong.Text = targetSong.Text
+	}
+	if updatedSong.Link == "" {
+		updatedSong.Link = targetSong.Link
+	}
+	if updatedSong.ReleaseDate.IsZero() {
+		updatedSong.ReleaseDate = targetSong.ReleaseDate
+	}
+	if updatedSong.CreatedAt.IsZero() {
+		updatedSong.CreatedAt = targetSong.CreatedAt
+	}
+	// UpdatedAt устанавливаем заново для актуального времени
+	updatedSong.UpdatedAt = time.Now()
+
+	return updatedSong
 }
