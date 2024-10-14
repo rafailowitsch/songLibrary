@@ -32,7 +32,7 @@ CONFIG_PATH=путь до конфигурационного файла
 
 Для применения или отката миграций воспользуйтесь следующими командами (таблица `songs` создаётся автоматически при запуске приложения через миграции):
 
-- **Применение одной миграции:**
+- **Применение миграции:**
 
 ```sh
 migrate -path ./internal/app/migrations -database 'postgres://postgres:postgres@localhost:5434/postgres?sslmode=disable' up 1
